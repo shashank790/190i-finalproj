@@ -1,0 +1,4 @@
+To run the repo, we need to use the following commands in terminal to get our models downloaded:
+1. pip install gdown
+2. gdown --id 1pDPtsRLq9IIeEmj4HbmpHs3eC9UnUGeA
+3. unzip models.zip
