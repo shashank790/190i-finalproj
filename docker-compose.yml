@@ -1,0 +1,63 @@
+x-gpu-enabled: &gpu-enabled
+  devices:
+    - driver: nvidia
+      count: all
+      capabilities:
+        - gpu # Enables GPU access for the container.
+
+x-gpu-disabled: &gpu-disabled
+  devices: [] # Disables GPU access (default for systems without an NVIDIA GPU).
+
+services:
+  ebook2audiobook:
+    # Docker GPU Options
+    # Available tags: latest (CUDA 11), cpu, rocm, cuda11, cuda12, xpu (x86 only), lite
+    image: docker.io/athomasson2/ebook2audiobook:lite
+    pull_policy: always
+    entrypoint: ["python", "app.py", "--script_mode", "full_docker"]
+    command: [] # <- Extra ebook2audiobook parameters can be added here
+    tty: true
+    stdin_open: true
+    ports:
+      - 7860:7860 # Maps container's port 7860 to the host's port 7860.
+    deploy:
+      resources:
+        reservations:
+          <<: *gpu-disabled # Use *gpu-enabled if you have an NVIDIA GPU.
+          # --- CPU Memory (RAM) Reservation ---
+          # memory: 4g   # Uncomment to reserve 4GB of system RAM (minimum required by the container).
+          # --- GPU VRAM (Indirect Control) ---
+          # devices:     # Uncomment and configure to limit GPU VRAM (requires GPU-enabled above).
+          #   - driver: nvidia
+          #     count: 1 # Use fractional GPU count (e.g., 0.5) to indirectly limit VRAM.
+          #     capabilities:
+          #       - gpu
+        limits: {} # Keeps limits as an empty mapping to avoid errors. Uncomment and configure below.
+          # --- CPU Memory (RAM) Limit ---
+          # memory: 4g   # Uncomment to set a 4GB upper limit on system RAM usage by the container.
+          # --- GPU Memory (VRAM) Limits ---
+          # devices:     # Uncomment and configure to limit GPU VRAM (requires GPU-enabled above).
+          #   - driver: nvidia
+          #     count: 1 # Use fractional GPU count (e.g., 0.5) to indirectly limit VRAM.
+          #     capabilities:
+          #       - gpu
+    volumes:
+      - ./:/app  # Maps the local directory to the container.
+
+# Common Issues: ----
+# --> `python: can't open file '/home/user/app/app.py': [Errno 2] No such file or directory`
+# Removed all post arguments as CMD was replaced with ENTRYPOINT in the Dockerfile  
+# Example correction:  
+# Before: command: ["python", "app.py", "--script_mode", "full_docker"] or -> `docker run athomasson2/ebook2audiobook python app.py --script_mode full_docker`
+# After: nothing needed  or just -> `docker run athomasson2/ebook2audiobook`
+# Extra arguments after app.py can still be added to the -> command: [] 
+# Example adding extra arguments -> command: ["--share"] or -> command: ["--help"]
+
+
+
+# Additional Notes:
+# - "CPU Memory (RAM)" refers to the system RAM used by the container.
+# - "GPU VRAM" refers to the graphics memory allocated to the container's GPU tasks.
+# - To enable GPU VRAM limits, ensure the NVIDIA Docker runtime is installed and active.
+# - The `memory` options (RAM) use units like 'm' (megabytes) or 'g' (gigabytes).
+# - The `count` parameter for GPU limits controls how much of the GPU (and indirectly VRAM) is accessible.

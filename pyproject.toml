@@ -1,0 +1,64 @@
+[build-system]
+name = "ebook2audiobook"
+requires = ["setuptools >= 64"]
+build-backend = "setuptools.build_meta"
+
+[tool.poetry]
+name = "ebook2audiobook"
+version = "0.0.0"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION.txt"}
+
+[project]
+name = "ebook2audiobook"
+description = "Convert eBooks to audiobooks with chapters and metadata"
+authors = [
+    { name = "Drew Thomasson" }
+]
+dependencies = [
+	"argostranslate",
+	"beautifulsoup4",
+	"cutlet",
+	"deep_translator",
+	"demucs",
+	"docker",
+	"ebooklib",
+	"fastapi",
+	"gradio",
+	"hangul-romanize",
+	"indic-nlp-library",
+	"iso-639",
+	"jieba",
+	"mecab",
+	"mecab-python3",
+	"konlpy",
+	"pythainlp",
+	"pydub",
+	"m4b-util",
+	"nvidia-ml-py",
+	"PyOpenGL",
+	"pypinyin",
+	"ray",
+	"regex",
+	"translate",
+	"tqdm",
+	"suno-bark",
+	"unidic",
+	"pymupdf4llm",
+	"torch",
+	"coqui-tts",
+	"torchvggish",
+	"transformers==4.51.3"
+]
+readme = "README.md"
+requires-python = ">3.9,<3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+scripts = { "ebook2audiobook" = "app:main" }
+
+[project.urls]
+"Homepage" = "https://github.com/DrewThomasson/ebook2audiobook"
