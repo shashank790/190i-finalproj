@@ -2,3 +2,6 @@ To run the repo, we need to use the following commands in terminal to get our mo
 1. pip install gdown
 2. gdown --id 1pDPtsRLq9IIeEmj4HbmpHs3eC9UnUGeA
 3. unzip models.zip
+
+And then use this command to run our program itself:
+python3 app.py
