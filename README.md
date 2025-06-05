@@ -133,6 +133,24 @@ to be sure your issue does not exist already.**
 **Lacking of any standards structure like what is a chapter, paragraph, preface etc.<br>
 you should first remove manually any text you don't want to be converted in audio.**
 
+### Model Download Instructions (IMPORTANT)
+To run the repo, we need to download the required TTS models first:
+
+1. **Install gdown** (a Google Drive downloader):
+    ```bash
+    pip install gdown
+    ```
+
+2. **Download the models zip**:
+    ```bash
+    gdown --id 1pDPtsRLq9IIeEmj4HbmpHs3eC9UnUGeA
+    ```
+
+3. **Unzip the models**:
+    ```bash
+    unzip models.zip
+    ```
+
 ### Installation Instructions
 1. **Clone repo**
 ```bash
