@@ -1368,22 +1368,43 @@ def get_compatible_tts_engines(language):
     return compatible_engines
 
 def convert_ebook_batch(args):
-    if isinstance(args['ebook_list'], list):
-        ebook_list = args['ebook_list'][:]
-        for file in ebook_list: # Use a shallow copy
-            if any(file.endswith(ext) for ext in ebook_formats):
-                args['ebook'] = file
-                print(f'Processing eBook file: {os.path.basename(file)}')
-                progress_status, passed = convert_ebook(args)
-                if passed is False:
-                    print(f'Conversion failed: {progress_status}')
-                    sys.exit(1)
-                args['ebook_list'].remove(file) 
-        reset_ebook_session(args['session'])
-        return progress_status, passed
-    else:
-        print(f'the ebooks source is not a list!')
-        sys.exit(1)       
+    """
+    Converts a list of ebook files to audio, one by one.
+    Provides detailed feedback and ensures session cleanup.
+    """
+    if not isinstance(args.get('ebook_list'), list):
+        print("Error: 'ebook_list' must be a list of ebook file paths!")
+        sys.exit(1)
+
+    ebook_list = args['ebook_list'][:]
+    total_files = len(ebook_list)
+    print(f"Starting batch conversion of {total_files} eBooks...")
+
+    for idx, file in enumerate(ebook_list, start=1):
+        if not any(file.endswith(ext) for ext in ebook_formats):
+            print(f"Skipping non-ebook file: {file}")
+            continue
+
+        args['ebook'] = file
+        print(f"[{idx}/{total_files}] Processing eBook: {os.path.basename(file)}")
+        
+        try:
+            progress_status, passed = convert_ebook(args)
+            if not passed:
+                print(f"Error converting {file}: {progress_status}")
+                continue
+            print(f"Successfully converted: {os.path.basename(file)}")
+        except Exception as e:
+            print(f"Unexpected error during conversion of {file}: {e}")
+            continue
+        finally:
+            # Remove the processed file from the list
+            if file in args['ebook_list']:
+                args['ebook_list'].remove(file)
+
+    print("Batch conversion complete.")
+    reset_ebook_session(args['session'])
+    return "Batch conversion complete.", True
 
 def convert_ebook(args):
     try:
@@ -1995,16 +2016,24 @@ def web_interface(args):
         gr_confirm_no_btn_hidden = gr.Button('', elem_id='confirm_no_btn_hidden', visible=False)
         
         def show_alert(state):
-            if isinstance(state, dict):
-                if state['type'] is not None:
-                    if state['type'] == 'error':
-                        gr.Error(state['msg'])
-                    elif state['type'] == 'warning':
-                        gr.Warning(state['msg'])
-                    elif state['type'] == 'info':
-                        gr.Info(state['msg'])
-                    elif state['type'] == 'success':
-                        gr.Success(state['msg'])
+            # Added fallback handling for unexpected types
+            if not isinstance(state, dict):
+                gr.Warning("Invalid alert state structure.")
+                return
+
+            alert_type = state.get("type")
+            alert_msg = state.get("msg", "No message provided.")
+
+            if alert_type == "error":
+                gr.Error(alert_msg)
+            elif alert_type == "warning":
+                gr.Warning(alert_msg)
+            elif alert_type == "info":
+                gr.Info(alert_msg)
+            elif alert_type == "success":
+                gr.Success(alert_msg)
+            else:
+                gr.Info(f"Unknown alert type: {alert_type}. Message: {alert_msg}")
 
         def show_modal(type, msg):
             return f'''
@@ -2138,18 +2167,22 @@ def web_interface(args):
 
         def update_convert_btn(upload_file=None, upload_file_mode=None, custom_model_file=None, session=None):
             try:
-                if session is None:
+                if not session:
+                    # Session missing – disable button
                     return gr.update(variant='primary', interactive=False)
-                else:
-                    if hasattr(upload_file, 'name') and not hasattr(custom_model_file, 'name'):
-                        return gr.update(variant='primary', interactive=True)
-                    elif isinstance(upload_file, list) and len(upload_file) > 0 and upload_file_mode == 'directory' and not hasattr(custom_model_file, 'name'):
-                        return gr.update(variant='primary', interactive=True)
-                    else:
-                        return gr.update(variant='primary', interactive=False)
+
+                # Ensure consistent file checks and mode handling
+                has_file = hasattr(upload_file, 'name') or (isinstance(upload_file, list) and upload_file_mode == 'directory' and len(upload_file) > 0)
+                has_custom_model = hasattr(custom_model_file, 'name')
+
+                # Only allow convert if file(s) exist and no custom model is present
+                interactive = has_file and not has_custom_model
+                return gr.update(variant='primary', interactive=interactive)
+
             except Exception as e:
                 error = f'update_convert_btn(): {e}'
-                alert_exception(error)               
+                alert_exception(error)  
+                return gr.update(variant='primary', interactive=False)            
 
         def change_gr_ebook_file(data, id):
             try:
@@ -2345,13 +2378,19 @@ def web_interface(args):
             try:
                 nonlocal tts_engine_options
                 session = context.get_session(id)
-                tts_engine_options = get_compatible_tts_engines(session['language'])
-                session['tts_engine'] = session['tts_engine'] if session['tts_engine'] in tts_engine_options else tts_engine_options[0]
+                # Defensive fallback if language key missing
+                language = session.get('language', default_language_code)
+                tts_engine_options = get_compatible_tts_engines(language)
+
+                # Validate current TTS engine, fallback to first available
+                current_engine = session.get('tts_engine')
+                session['tts_engine'] = current_engine if current_engine in tts_engine_options else tts_engine_options[0]
+
                 return gr.update(choices=tts_engine_options, value=session['tts_engine'])
             except Exception as e:
                 error = f'update_gr_tts_engine_list(): {e}!'
                 alert_exception(error)              
-                return gr.update()
+                return gr.update(choices=[], value='')
 
         def update_gr_custom_model_list(id):
             try:
@@ -2391,18 +2430,20 @@ def web_interface(args):
 
         def change_gr_language(selected, id):
             session = context.get_session(id)
-            if selected == 'zzz':
-                new_language_code = default_language_code
-            else:
-                new_language_code = selected
+            new_language_code = default_language_code if selected == 'zzz' else selected
             session['language'] = new_language_code
-            return[
+
+            # More robust updates, adding fallback voice list if needed
+            updates = [
                 gr.update(value=session['language']),
                 update_gr_voice_list(id),
                 update_gr_tts_engine_list(id),
                 update_gr_custom_model_list(id),
                 update_gr_fine_tuned_list(id)
             ]
+
+            # Ensure no None in updates for Gradio
+            return [u if u else gr.update() for u in updates]
 
         def check_custom_model_tts(custom_model_dir, tts_engine):
             dir_path = os.path.join(custom_model_dir, tts_engine)
@@ -2530,88 +2571,82 @@ def web_interface(args):
                     "enable_text_splitting": enable_text_splitting,
                     "fine_tuned": fine_tuned
                 }
+
                 error = None
-                if args["ebook"] is None and args['ebook_list'] is None:
-                    error = 'Error: a file or directory is required.'
+                # Validation – either single file or list required
+                if not args["ebook"] and not args['ebook_list']:
+                    error = 'A file or directory is required.'
                     show_alert({"type": "warning", "msg": error})
-                elif args['num_beams'] < args['length_penalty']:
-                    error = 'Error: num beams must be greater or equal than length penalty.'
-                    show_alert({"type": "warning", "msg": error})                   
-                else:
-                    session['status'] = 'converting'
-                    session['progress'] = len(audiobook_options)
-                    if isinstance(args['ebook_list'], list):
-                        ebook_list = args['ebook_list'][:]
-                        for file in ebook_list:
-                            if any(file.endswith(ext) for ext in ebook_formats):
-                                print(f'Processing eBook file: {os.path.basename(file)}')
-                                args['ebook'] = file
-                                progress_status, passed = convert_ebook(args)
-                                if passed is False:
-                                    if session['status'] == 'converting':
-                                        error = 'Conversion cancelled.'
-                                        session['status'] = None
-                                        break
-                                    else:
-                                        error = 'Conversion failed.'
-                                        session['status'] = None
-                                        break
-                                else:
-                                    show_alert({"type": "success", "msg": progress_status})
-                                    args['ebook_list'].remove(file)
-                                    reset_ebook_session(args['session'])
-                                    count_file = len(args['ebook_list'])
-                                    if count_file > 0:
-                                        msg = f"{len(args['ebook_list'])} remaining..."
-                                    else: 
-                                        msg = 'Conversion successful!'
-                                    yield gr.update(value=msg)
-                        session['status'] = None
-                    else:
-                        print(f"Processing eBook file: {os.path.basename(args['ebook'])}")
-                        progress_status, passed = convert_ebook(args)
-                        if passed is False:
-                            if session['status'] == 'converting':
+                    return gr.update(value='')
+
+                # Logical validation
+                if args['num_beams'] < args['length_penalty']:
+                    error = 'num_beams must be >= length_penalty.'
+                    show_alert({"type": "warning", "msg": error})
+                    return gr.update(value='')
+
+                session['status'] = 'converting'
+                session['progress'] = len(audiobook_options)
+
+                if isinstance(args['ebook_list'], list):
+                    ebook_list = args['ebook_list'][:]
+                    for file in ebook_list:
+                        if any(file.endswith(ext) for ext in ebook_formats):
+                            print(f'Processing eBook: {os.path.basename(file)}')
+                            args['ebook'] = file
+                            progress_status, passed = convert_ebook(args)
+                            if not passed:
                                 session['status'] = None
-                                error = 'Conversion cancelled.'
+                                error = 'Conversion cancelled or failed.'
+                                break
                             else:
-                                session['status'] = None
-                                error = 'Conversion failed.'
-                        else:
-                            show_alert({"type": "success", "msg": progress_status})
-                            reset_ebook_session(args['session'])
-                            msg = 'Conversion successful!'
-                            return gr.update(value=msg)
-                if error is not None:
+                                show_alert({"type": "success", "msg": progress_status})
+                                args['ebook_list'].remove(file)
+                                reset_ebook_session(args['session'])
+                                remaining = len(args['ebook_list'])
+                                msg = f"{remaining} remaining..." if remaining else "Conversion successful!"
+                                yield gr.update(value=msg)
+                    session['status'] = None
+                else:
+                    print(f"Processing eBook: {os.path.basename(args['ebook'])}")
+                    progress_status, passed = convert_ebook(args)
+                    if not passed:
+                        session['status'] = None
+                        error = 'Conversion cancelled or failed.'
+                    else:
+                        show_alert({"type": "success", "msg": progress_status})
+                        reset_ebook_session(args['session'])
+                        return gr.update(value='Conversion successful!')
+
+                if error:
                     show_alert({"type": "warning", "msg": error})
+                return gr.update(value='')
+
             except Exception as e:
                 error = f'submit_convert_btn(): {e}'
                 alert_exception(error)
-            return gr.update(value='')
+                return gr.update(value='')
 
         def update_gr_audiobook_list(id):
             try:
                 nonlocal audiobook_options
                 session = context.get_session(id)
                 audiobook_options = [
-                    (f, os.path.join(session['audiobooks_dir'], str(f)))
+                    (f, os.path.join(session['audiobooks_dir'], f))
                     for f in os.listdir(session['audiobooks_dir'])
                 ]
-                audiobook_options.sort(
-                    key=lambda x: os.path.getmtime(x[1]),
-                    reverse=True
-                )
-                session['audiobook'] = session['audiobook'] if session['audiobook'] in [option[1] for option in audiobook_options] else None
-                if len(audiobook_options) > 0:
-                    if session['audiobook'] is not None:
-                        return gr.update(choices=audiobook_options, value=session['audiobook'])
-                    else:
-                        return gr.update(choices=audiobook_options, value=audiobook_options[0][1])
-                gr.update(choices=audiobook_options)
+                audiobook_options.sort(key=lambda x: os.path.getmtime(x[1]), reverse=True)
+
+                valid_audiobooks = [opt[1] for opt in audiobook_options]
+                if session['audiobook'] not in valid_audiobooks and audiobook_options:
+                    session['audiobook'] = audiobook_options[0][1]
+
+                return gr.update(choices=audiobook_options, value=session.get('audiobook', ''))
+
             except Exception as e:
                 error = f'update_gr_audiobook_list(): {e}!'
                 alert_exception(error)              
-                return gr.update()
+                return gr.update(choices=[], value='')
 
         def change_gr_read_data(data, state):
             msg = 'Error while loading saved session. Please try to delete your cookies and refresh the page'

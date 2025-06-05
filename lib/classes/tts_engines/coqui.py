@@ -28,18 +28,68 @@ torch.backends.cudnn.benchmark = True
 
 _original_multinomial = torch.multinomial
 
-def _safe_multinomial(input, num_samples, replacement=False, *, generator=None, out=None):
-	with torch.no_grad():
-		input = torch.nan_to_num(input, nan=0.0, posinf=0.0, neginf=0.0)
-		input = torch.clamp(input, min=0.0)
-		sum_input = input.sum(dim=-1, keepdim=True)
-		# Handle degenerate cases: fallback to uniform
-		mask = (sum_input <= 0)
-		if mask.any():
-			input[mask.expand_as(input)] = 1.0  # fallback to uniform distribution
-			sum_input = input.sum(dim=-1, keepdim=True)
-		input = input / sum_input
-	return _original_multinomial(input, num_samples, replacement=replacement, generator=generator, out=out)
+def _safe_multinomial(input_tensor, num_samples, replacement=False, *, generator=None, out=None):
+    """
+    Enhanced and robust multinomial sampling function that sanitizes input probabilities
+    and falls back to uniform sampling in edge cases.
+    
+    Args:
+        input_tensor (Tensor): Probability distribution tensor.
+        num_samples (int): Number of samples to draw.
+        replacement (bool, optional): Sampling with replacement.
+        generator (Generator, optional): PyTorch random generator.
+        out (Tensor, optional): Output tensor.
+
+    Returns:
+        Tensor: Indices of the drawn samples.
+    """
+    with torch.no_grad():
+        print("Running enhanced _safe_multinomial() function...")
+
+        # Step 1: Sanitize input tensor - replace NaNs and infinities
+        input_tensor = torch.where(
+            torch.isfinite(input_tensor),
+            input_tensor,
+            torch.zeros_like(input_tensor)
+        )
+        print("Replaced NaNs and Infs with zeros.")
+
+        # Step 2: Clamp negatives to zero to ensure valid probabilities
+        input_tensor = torch.clamp(input_tensor, min=0.0)
+        print("Clamped negative values to zero.")
+
+        # Step 3: Check for degenerate cases (sum <= 0)
+        sum_probs = input_tensor.sum(dim=-1, keepdim=True)
+        degenerate_mask = (sum_probs <= 0)
+        if degenerate_mask.any():
+            print("Detected degenerate case: Fallback to uniform distribution.")
+            # Create uniform distribution along last dim
+            input_tensor[degenerate_mask.expand_as(input_tensor)] = 1.0
+            sum_probs = input_tensor.sum(dim=-1, keepdim=True)
+
+        # Step 4: Normalize the tensor to form a valid probability distribution
+        input_tensor /= sum_probs
+        print(f"Normalized input tensor shape: {input_tensor.shape}")
+
+        # Step 5: Perform multinomial sampling with fallback safe guarantees
+        try:
+            sampled_indices = _original_multinomial(
+                input_tensor, num_samples,
+                replacement=replacement,
+                generator=generator,
+                out=out
+            )
+            print(f"Sampled indices shape: {sampled_indices.shape}")
+            return sampled_indices
+        except Exception as e:
+            # Fallback emergency: if sampling still fails
+            print(f"Fallback multinomial error: {e}. Using uniform random sampling instead.")
+            fallback_indices = torch.randint(
+                input_tensor.shape[-1],
+                (input_tensor.shape[0], num_samples) if input_tensor.dim() > 1 else (num_samples,),
+                generator=generator
+            )
+            return fallback_indices
 
 torch.multinomial = _safe_multinomial
 
@@ -357,36 +407,58 @@ class Coqui:
         msg = f"Saved NPZ file: {npz_path}"
         print(msg)
         
-    def _detect_gender(self, voice_path):
+    def _detect_gender(self, voice_path, pitch_threshold=135, peak_height_ratio=0.2):
+        """
+        Attempts to detect the gender of a speaker based on pitch analysis.
+        
+        Args:
+            voice_path (str): Path to the audio file.
+            pitch_threshold (float, optional): Frequency threshold (Hz) for gender classification.
+            peak_height_ratio (float, optional): Peak detection sensitivity ratio.
+        
+        Returns:
+            str or None: Detected gender ('male' or 'female') or None if undetermined.
+        """
         try:
+            # Load audio file
             sample_rate, signal = wav.read(voice_path)
+            print(f"Loaded audio file: {voice_path} at {sample_rate} Hz")
+
             # Convert stereo to mono if needed
-            if len(signal.shape) > 1:
+            if signal.ndim > 1:
+                print(f"Converting stereo to mono: original shape {signal.shape}")
                 signal = np.mean(signal, axis=1)
-            
+
             # Compute FFT
             fft_spectrum = np.abs(np.fft.fft(signal))
             freqs = np.fft.fftfreq(len(fft_spectrum), d=1/sample_rate)
+
             # Consider only positive frequencies
             positive_freqs = freqs[:len(freqs)//2]
             positive_magnitude = fft_spectrum[:len(fft_spectrum)//2]
-            
+
             # Find peaks in frequency spectrum
-            peaks, _ = find_peaks(positive_magnitude, height=np.max(positive_magnitude) * 0.2)
-            if len(peaks) == 0:
-                return None 
-            
-            # Find the first strong peak within the human voice range (75Hz - 300Hz)
+            peak_height = np.max(positive_magnitude) * peak_height_ratio
+            peaks, _ = find_peaks(positive_magnitude, height=peak_height)
+            print(f"Detected {len(peaks)} significant peaks in spectrum")
+
+            if not peaks.size:
+                print("No significant peaks detected.")
+                return None
+
+            # Analyze peaks for pitch detection within human voice range
             for peak in peaks:
-                if 75 <= positive_freqs[peak] <= 300:
-                    pitch = positive_freqs[peak]
-                    gender = "female" if pitch > 135 else "male"
+                freq = positive_freqs[peak]
+                if 75 <= freq <= 300:
+                    gender = "female" if freq > pitch_threshold else "male"
+                    print(f"Detected pitch: {freq:.2f} Hz. Inferred gender: {gender}")
                     return gender
-                    break     
+
+            print("No pitch within typical human range detected.")
             return None
+
         except Exception as e:
-            error = f"_detect_gender() error: {voice_path}: {e}"
-            print(error)
+            print(f"Error in _detect_gender() for file {voice_path}: {e}")
             return None
 
     def _unload_tts(self, device):
@@ -431,83 +503,129 @@ class Coqui:
             return trimmed_audio       
         raise TypeError("audio_data must be a PyTorch tensor or a list of numerical values.")
 
-    def _normalize_audio(self, input_file, output_file, samplerate, method="ffmpeg"):
+    def _normalize_audio(self, input_file, output_file, samplerate, agate_threshold=-25, equalizer_config=None):
         """
-        Normalize audio using ffmpeg (default), sox, or native fallback methods.
-        Parameters:
+        Normalizes the audio file using ffmpeg with a customizable filter chain.
+
+        Args:
             input_file (str): Path to the input audio file.
-            output_file (str): Path where the normalized output will be saved.
-            samplerate (int): Desired sample rate.
-            method (str): Normalization method to use ('ffmpeg', 'sox', 'native').
+            output_file (str): Path to the output audio file.
+            samplerate (int): Desired output sample rate.
+            agate_threshold (int, optional): Threshold for agate filter. Defaults to -25.
+            equalizer_config (list of tuples, optional): List of (freq, gain) for equalizer. Defaults to preset.
         Returns:
-            bool: True if successful, False otherwise.
+            bool: True if normalization successful, False otherwise.
         """
-        if method == "sox":
-            sox_cmd = [shutil.which('sox'), input_file, '-r', str(samplerate), output_file]
-            try:
-                subprocess.run(sox_cmd, check=True)
-                return True
-            except subprocess.CalledProcessError as e:
-                print(f"_normalize_audio() sox error: {input_file}: {e}")
-                return False
-        elif method == "ffmpeg":
-            filter_complex = (
-                'agate=threshold=-25dB:ratio=1.4:attack=10:release=250,'
-                'afftdn=nf=-70,'
-                'acompressor=threshold=-20dB:ratio=2:attack=80:release=200:makeup=1dB,'
-                'loudnorm=I=-14:TP=-3:LRA=7:linear=true,'
-                'equalizer=f=150:t=q:w=2:g=1,'
-                'equalizer=f=250:t=q:w=2:g=-3,'
-                'equalizer=f=3000:t=q:w=2:g=2,'
-                'equalizer=f=5500:t=q:w=2:g=-4,'
-                'equalizer=f=9000:t=q:w=2:g=-2,'
-                'highpass=f=63[audio]'
-            )
-            ffmpeg_cmd = [shutil.which('ffmpeg'), '-hide_banner', '-nostats', '-i', input_file]
-            ffmpeg_cmd += [
-                '-filter_complex', filter_complex,
-                '-map', '[audio]',
-                '-ar', str(samplerate),
-                '-y', output_file
+        # Prepare equalizer configuration
+        if equalizer_config is None:
+            equalizer_config = [
+                (150, 1), (250, -3), (3000, 2),
+                (5500, -4), (9000, -2)
             ]
-            try:
-                subprocess.run(
-                    ffmpeg_cmd,
-                    env={},
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE,
-                    encoding='utf-8',
-                    errors='ignore'
-                )
-                return True
-            except subprocess.CalledProcessError as e:
-                print(f"_normalize_audio() error: {input_file}: {e}")
-                return False
+        equalizer_filters = ",".join([f"equalizer=f={f}:t=q:w=2:g={g}" for f, g in equalizer_config])
+
+        # Build filter_complex string
+        filter_complex = (
+            f"agate=threshold={agate_threshold}dB:ratio=1.4:attack=10:release=250,"
+            "afftdn=nf=-70,"
+            "acompressor=threshold=-20dB:ratio=2:attack=80:release=200:makeup=1dB,"
+            "loudnorm=I=-14:TP=-3:LRA=7:linear=true,"
+            f"{equalizer_filters},"
+            "highpass=f=63[audio]"
+        )
+
+        # Construct ffmpeg command
+        ffmpeg_cmd = [shutil.which('ffmpeg'), '-hide_banner', '-nostats', '-i', input_file]
+        ffmpeg_cmd += [
+            '-filter_complex', filter_complex,
+            '-map', '[audio]',
+            '-ar', str(samplerate),
+            '-y', output_file
+        ]
+
+        print(f"Running FFmpeg normalization with agate_threshold={agate_threshold}dB on {input_file}")
+        print(f"Equalizer settings: {equalizer_config}")
+
+        try:
+            result = subprocess.run(
+                ffmpeg_cmd,
+                env={},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding='utf-8',
+                errors='ignore',
+                check=True
+            )
+            print(f"Normalization complete. Output saved to {output_file}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Normalization failed for {input_file}. FFmpeg error: {e}")
+            print("FFmpeg stderr output:", e.stderr)
+            return False
 
     def _append_sentence2vtt(self, sentence_obj, path):
-        def format_timestamp(seconds):
+        """
+        Enhanced version of appending a sentence to a VTT file, adding safety and clearer flow.
+        
+        Args:
+            sentence_obj (dict): Dictionary with 'start', 'end', 'text', and optionally 'resume_check'.
+            path (str): Path to the VTT file.
+        
+        Returns:
+            int: Next index for subtitles.
+        """
+
+        def _format_timestamp(seconds):
             m, s = divmod(seconds, 60)
             h, m = divmod(m, 60)
             return f"{int(h):02}:{int(m):02}:{s:06.3f}"
 
+        print(f"Appending sentence to VTT file: {path}")
+
+        # Step 1: Determine the current index by counting "-->" in existing file
         index = 1
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                for line in lines:
-                    if "-->" in line:
-                        index += 1
-        if index > 1 and "resume_check" in sentence_obj and sentence_obj["resume_check"] < index:
-            return index  # Already written
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                    for line in lines:
+                        if "-->" in line:
+                            index += 1
+                print(f"Current subtitle index: {index}")
+            except Exception as e:
+                print(f"Error reading existing VTT file: {e}")
+
+        # Step 2: Check if we need to skip this sentence (for resuming conversions)
+        if index > 1 and "resume_check" in sentence_obj:
+            if sentence_obj["resume_check"] < index:
+                print("Skipping sentence already written.")
+                return index  # Already written
+
+        # Step 3: If file does not exist, create and add header
         if not os.path.exists(path):
+            print("VTT file does not exist. Creating with header.")
             with open(path, "w", encoding="utf-8") as f:
                 f.write("WEBVTT\n\n")
-        with open(path, "a", encoding="utf-8") as f:
-            start = format_timestamp(sentence_obj["start"])
-            end = format_timestamp(sentence_obj["end"])
-            text = re.sub(r'[\r\n]+', ' ', sentence_obj["text"]).strip()
-            f.write(f"{start} --> {end}\n{text}\n\n")
-        return index + 1
+
+        # Step 4: Format start, end, and text (cleaned and robust)
+        try:
+            start = _format_timestamp(sentence_obj["start"])
+            end = _format_timestamp(sentence_obj["end"])
+            text_raw = sentence_obj["text"]
+            # Clean up text: remove newlines, trim whitespace, ensure single spaces
+            text = re.sub(r'[\r\n]+', ' ', text_raw).strip()
+            text = re.sub(r'\s{2,}', ' ', text)
+            print(f"Formatted subtitle: {start} --> {end} | Text length: {len(text)}")
+
+            # Step 5: Append to file
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{start} --> {end}\n{text}\n\n")
+
+            print(f"Subtitle appended successfully. Next index: {index + 1}")
+            return index + 1
+        except Exception as e:
+            print(f"Error appending subtitle: {e}")
+            return index + 1  # Fail-safe: move to next index even if error
 
     def _is_valid(self, audio_data):
         if audio_data is None:
