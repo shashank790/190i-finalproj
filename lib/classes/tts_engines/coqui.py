@@ -595,19 +595,13 @@ class Coqui:
             except Exception as e:
                 print(f"Error reading existing VTT file: {e}")
 
-        # Step 2: Check if we need to skip this sentence (for resuming conversions)
-        if index > 1 and "resume_check" in sentence_obj:
-            if sentence_obj["resume_check"] < index:
-                print("Skipping sentence already written.")
-                return index  # Already written
-
-        # Step 3: If file does not exist, create and add header
+        # Step 2: If file does not exist, create and add header
         if not os.path.exists(path):
             print("VTT file does not exist. Creating with header.")
             with open(path, "w", encoding="utf-8") as f:
                 f.write("WEBVTT\n\n")
 
-        # Step 4: Format start, end, and text (cleaned and robust)
+        # Step 3: Format start, end, and text (cleaned and robust)
         try:
             start = _format_timestamp(sentence_obj["start"])
             end = _format_timestamp(sentence_obj["end"])
@@ -617,7 +611,7 @@ class Coqui:
             text = re.sub(r'\s{2,}', ' ', text)
             print(f"Formatted subtitle: {start} --> {end} | Text length: {len(text)}")
 
-            # Step 5: Append to file
+            # Step 4: Append to file
             with open(path, "a", encoding="utf-8") as f:
                 f.write(f"{start} --> {end}\n{text}\n\n")
 

@@ -6,6 +6,7 @@ BARK = 'bark'
 VITS = 'vits'
 FAIRSEQ = 'fairseq'
 YOURTTS = 'yourtts'
+ELEVENLABS = 'elevenlabs'
 
 default_tts_engine = 'xtts'
 default_fine_tuned = 'internal'
@@ -353,5 +354,16 @@ models = {
             "files": default_yourtts_settings['files'],
             "samplerate": default_yourtts_settings['samplerate']
         }
+    }
+}
+
+models[ELEVENLABS] = {
+    "internal": {
+        "lang": "multi",
+        "repo": "elevenlabs/api",
+        "sub": "",
+        "voice": None,  # Or your default test voice
+        "files": [],  # No local files usually for APIs
+        "samplerate": 24000
     }
 }
