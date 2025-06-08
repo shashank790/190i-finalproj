@@ -23,6 +23,12 @@ from lib.models import *
 from lib.conf import voices_dir, models_dir, default_audio_proc_format
 from lib.lang import language_tts
 
+# Added for robust text preprocessing:
+import inflect
+import nltk  # Note: need to pip install here
+nltk.download('punkt')
+from nltk.tokenize import sent_tokenize
+
 torch.backends.cudnn.benchmark = True
 #torch.serialization.add_safe_globals(["numpy.core.multiarray.scalar"])
 
@@ -635,10 +641,80 @@ class Coqui:
         except ImportError:
             pass
         return False
+    
+    # Added for text preprocessing:
+    def _preprocess_text(self, text):
+        import re
+        import nltk
+        from num2words import num2words
+
+        # Ensure punkt is downloaded
+        nltk.download("punkt", quiet=True)
+
+        # Clean up symbols
+        symbol_map = {
+            "&": "and",
+            "@": "at",
+            "#": "number",
+            "%": "percent",
+            "$": "dollars",
+            "€": "euros",
+            "£": "pounds",
+            "°": "degrees",
+            "+": "plus",
+            "=": "equals",
+            "<": "less than",
+            ">": "greater than",
+            "~": "approximately",
+        }
+
+        abbreviation_map = {
+            "Dr.": "Doctor",
+            "Mr.": "Mister",
+            "Mrs.": "Misses",
+            "St.": "Saint",
+            "vs.": "versus",
+            "e.g.": "for example",
+            "i.e.": "that is",
+            "etc.": "et cetera",
+            "Jan.": "January",
+            "Feb.": "February",
+            "Mar.": "March",
+            "Apr.": "April",
+            "Jun.": "June",
+            "Jul.": "July",
+            "Aug.": "August",
+            "Sep.": "September",
+            "Sept.": "September",
+            "Oct.": "October",
+            "Nov.": "November",
+            "Dec.": "December",
+        }
+
+        # Normalize abbreviations
+        for abbr, full in abbreviation_map.items():
+            text = text.replace(abbr, full)
+
+        # Replace symbols
+        for sym, word in symbol_map.items():
+            text = text.replace(sym, f" {word} ")
+
+        # Convert numbers to words
+        def number_to_words(match):
+            return num2words(match.group())
+
+        text = re.sub(r'\b\d+\b', number_to_words, text)
+
+        # Final cleanup: normalize whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+
+        return text 
+
 
     def convert(self, sentence_number, sentence):
         global xtts_builtin_speakers_list
         try:
+            #sentence = self._preprocess_text(sentence)  # Added for text preprocessing
             audio_data = False
             audio2trim = False
             trim_audio_buffer = 0.001

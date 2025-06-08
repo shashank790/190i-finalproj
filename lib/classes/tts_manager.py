@@ -24,12 +24,19 @@ class TTSManager:
 
     def convert_sentence2audio(self, sentence_number, sentence):
         try:
-            if self.session['tts_engine'] in (XTTSv2, BARK, VITS, FAIRSEQ, YOURTTS):
-                return self.tts.convert(sentence_number, sentence)
+            # result = self.tts._preprocess_text(sentence)
+            result = sentence;
+
+            if isinstance(result, list):
+                # Process each sentence individually (if chunking is enabled)
+                success = True
+                for idx, sent in enumerate(result):
+                    if not self.tts.convert(f"{sentence_number}_{idx}", sent):
+                        success = False
+                return success
             else:
-                print('Other TTS engines coming soon!')    
-                return False
+                # Single string (backward compatibility)
+                return self.tts.convert(sentence_number, result)
+
         except Exception as e:
-            error = f'convert_sentence2audio(): {e}'
             raise ValueError(e)
-            return False
